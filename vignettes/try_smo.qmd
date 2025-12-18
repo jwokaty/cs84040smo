@@ -1,0 +1,39 @@
+---
+title: "Sequential Minimal Optimization"
+format: revealjs
+editor: visual
+---
+
+## Model class
+
+```{r smo-class}
+library(caret)
+library(dplyr)
+library(cs84040smo)
+## Toy test
+  
+toy_x <- iris |>
+  select(-c(Species))
+scaled_toy_x <- scale(toy_x)
+toy_y <- iris |>
+  mutate(y = if_else(Species == "setosa", 1, -1)) |>
+  pull(y)
+
+toy_model <- SmoModel$new(x = scaled_toy_x, y = toy_y, kernel = "linear", verbose = TRUE, C = 3.0, tol = 0.001)
+fit_smo(toy_model)
+toy_model$predict(toy_model$x[45:55, ])
+toy_model$predict(toy_model$x[90:100, ])
+#confusionMatrix(toy_model$predict(toy_model$x), toy_y)
+```
+
+```{r training-on-bacteriophages, eval = FALSE}
+model <- SmoModel$new(x = training_x, y = training_y, kernel = "linear",
+                      verbose = TRUE)
+train_smo(model)
+
+predictions <- model$predict(testing_x)
+```
+
+```{r sessionInfo}
+sessionInfo()
+```

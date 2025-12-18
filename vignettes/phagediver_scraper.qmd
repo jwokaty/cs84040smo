@@ -1,0 +1,356 @@
+---
+title: "phagedive_scraper"
+format: html
+editor: visual
+---
+
+# Install dependencies
+
+```{r install-biocmanager-rvest}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(version = "3.22")
+
+if (!require("rvest", quietly = TRUE))
+    BiocManager::install("rvest")
+
+if (!require("dplyr", quietly = TRUE))
+    BiocManager::install("dplyr")
+
+if (!require("xml2", quietly = TRUE))
+    BiocManager::install("xml2")
+```
+
+# Configure settings
+
+```{r settings}
+library(rvest)
+library(dplyr)
+library(xml2)
+
+STRAINS <- 1167
+URL_PATH <- "https://phagedive.dsmz.de/strain/"
+ORIGINAL <- data.frame(id = 1:STRAINS, html = "")
+SLEEP <- 60
+BASE_PATH <- file.path("/home/fm/Classes/cs84040/project")
+RAW_SAVE_PATH <- file.path(BASE_PATH, "raw")
+DATA_SAVE_PATH <- file.path(BASE_PATH, "data") 
+CODE_SAVE_PATH <- file.path(BASE_PATH, "code") 
+```
+
+# Download files
+
+```{r get-strains, eval=FALSE}
+getStrains <- function() {
+    for (i in seq(1, STRAINS)) {
+        saved_file <- paste0(RAW_SAVE_PATH, "html/strain", i)
+        if (!file.exists(saved_file)) {
+            download.file(paste0(URL_PATH, i), saved_file)
+            Sys.sleep(SLEEP)
+            print(paste("Downloaded", saved_file))
+        } else
+            print(paste("Found", saved_file))
+    }
+}
+```
+
+# Subfunctions
+
+```{r subfunctions}
+get_doi <- function(html) {
+    content <- html |>
+        rvest::html_element("p") |>
+        rvest::html_text2() |>
+        stringr::str_split(" ") |>
+        unlist()
+    gsub("\r", "", content[length(content)])
+}
+
+get_section_headers <- function(html) {
+    html |> rvest::html_elements(".tables-mobile-container") |>
+    rvest::html_elements("h4") |>
+    rvest::html_text2()
+}
+
+get_header <- function(record) {
+    header <- c("Reference")
+    for (sh in names(record)) {
+        for (ss in names(record[[sh]])) {
+            if (ss != "Reference")
+                header <- c(header, gsub(" ", "_", paste(sh, ss, sep = "_")))
+        }
+    }
+    header
+}
+
+get_record <- function(html, section_headers) {
+    tables <- html |>
+        rvest::html_elements("table") |>
+        rvest::html_table()
+    # If we have more than one row, we just use the first row
+    for (i in seq(tables)) {
+        if (dim(tables[[i]])[1] > 1)
+            tables[[i]] <- tables[[i]][1, ]
+        if ("Fasta file" %in% names(tables[[i]])) {
+            tables[[i]]$`Fasta file` <- paste0("https://www.ncbi.nlm.nih.gov/nuccore/",
+                                               tables[[i]]$`Accession number`,
+                                               "?report=fasta")
+        }
+    }
+    # We'll drop Literature since it's a little hard to capture
+    if ("Literature" %in% section_headers) {
+        index <- which(section_headers == "Literature")
+        tables <- tables[-index]
+        section_headers <- section_headers[-index]
+    }
+    names(tables) <- section_headers
+    header <- get_header(tables)
+    record <- tables |>
+        purrr::reduce(dplyr::inner_join, by = "Reference")
+    names(record) <- header
+    record
+}
+
+get_sections <- function(html) {
+    html |>
+    rvest::html_elements(".tables-mobile-container")
+}
+```
+
+# An example of scraping an html file
+
+```{r example, eval = FALSE}
+html <- rvest::read_html(file.path(RAW_SAVE_PATH, "html/strains/strain1"))
+sections <- get_sections(html)
+section_headers <- get_section_headers(html)
+my_record <- get_record(sections, section_headers)
+```
+
+# Get records from html files
+
+```{r get-records}
+files <- list.files(path = file.path(RAW_SAVE_PATH, "html/strains"),
+                    pattern = "strain[0-9]+")
+log <- file.path(RAW_SAVE_PATH, "error.log")
+
+records <- list()
+
+for (i in seq(STRAINS)) {
+    html <- tryCatch(
+        rvest::read_html(file.path(RAW_SAVE_PATH, "strains",
+                                   paste0("strain", i))),
+        error = function(e) {
+            write(e, file = log)
+        }
+    )
+    print(paste("Retrieving", i, "..."))
+    sections <- get_sections(html)
+    section_headers <- get_section_headers(html)
+    records[[length(records)+1]] <- get_record(sections, section_headers)
+}
+```
+
+# Standardize column types with multiple values
+
+```{r preprocess}
+for (i in seq(STRAINS)) {
+    if ("Origin_Sampling_date" %in% names(records[[i]])) {
+        records[[i]]$Origin_Sampling_date <- 
+            as.character(records[[i]]$Origin_Sampling_date)
+    }
+    if ("Host_cultivation_Temperature_(C°)" %in% names(records[[i]])) {
+        records[[i]]$`Host_cultivation_Temperature_(C°)` <- 
+            as.character(records[[i]]$`Host_cultivation_Temperature_(C°)`)
+    }
+    if ("Phage_cultivation_Temperature_(C°)" %in% names(records[[i]])) {
+        records[[i]]$`Phage_cultivation_Temperature_(C°)` <- 
+            as.character(records[[i]]$`Phage_cultivation_Temperature_(C°)`)
+    }  
+    if ("Host_cultivation_DSM_medium_number" %in% names(records[[i]])) {
+        records[[i]]$`Host_cultivation_DSM_medium_number` <- 
+            as.character(records[[i]]$`Host_cultivation_DSM_medium_number`)
+    }
+    if ("Phage_cultivation_DSM_medium_number" %in% names(records[[i]])) {
+        records[[i]]$`Phage_cultivation_DSM_medium_number` <- 
+            as.character(records[[i]]$`Phage_cultivation_DSM_medium_number`)
+    }  
+    if ("Morphology_Plaque_size_(mm)" %in% names(records[[i]])) {
+        records[[i]]$`Morphology_Plaque_size_(mm)` <- 
+            as.character(records[[i]]$`Morphology_Plaque_size_(mm)`)
+    }
+    if ("Strains_Name_short" %in% names(records[[i]])) {
+        records[[i]]$`Strains_Name_short` <- 
+            as.character(records[[i]]$`Strains_Name_short`)
+    }
+}
+```
+
+# Find union of all columns.
+
+```{r all-columns}
+all_columns <- c()
+
+for (record in records) {
+    all_columns <- dplyr::union(all_columns, names(record))
+}
+
+df <- data.frame(matrix(nrow = 0, ncol = length(all_columns)))
+colnames(df) <- all_columns
+
+result <- dplyr::bind_rows(records)
+```
+
+# Write to csv
+
+```{r write_csv}
+write.csv(result, file.path(DATA_SAVE_PATH, "phagedive.csv"))
+```
+
+# Find complete genomes with a label
+
+```{r complete}
+processed_result <- result |>
+      select(Strains_Name, Strains_Strain_number,
+            Taxonomy_Realm, Taxonomy_Kingdom, Taxonomy_Phylum, 
+            Taxonomy_Class, Taxonomy_Order,  Taxonomy_Family,
+            Taxonomy_Genus, Taxonomy_Species, Taxonomy_Full_scientific_name,
+            Origin_Habitat, Host_Host_species, Host_Host_strain_number,
+            Host_Biosafety_level, Host_range_Host_range_id,
+            Host_cultivation_Medium_name, Phage_cultivation_Propagation_medium,
+            Sequence_genome_Nucleic_acid_type, Sequence_genome_Sequence_database,
+            Sequence_genome_Accession_number, Sequence_genome_Sequence_title,
+            Sequence_genome_Assembly_level, Morphology_Morphotype,
+            Morphology_Plaque_description, Life_cycle_Type_phage,
+            Life_cycle_Type_cycle)
+
+# Here, I filtered by the assembly but it's not necessary
+complete <- processed_result |>
+    filter(Sequence_genome_Assembly_level == "Complete" &
+           !is.na(Sequence_genome_Accession_number))
+
+complete_unlabeled <- complete |>
+    filter(is.na(Life_cycle_Type_phage))
+
+# For training set
+complete_labeled <- complete |>
+    filter(!is.na(Life_cycle_Type_phage))
+```
+
+# Download accession data from NCBI in xml format
+
+```{r download-accession-xml-files}
+
+ENTREZ_URL <- "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&retmode=xml&id="
+
+getAnnotatedAccessions <- function(accessions, save_path) {
+    if (!dir.exists(save_path))
+        dir.create(save_path)
+    for (accession in accessions) {
+        #print(paste("Downloading", paste0(ENTREZ_URL, accession)))
+        saved_file <- file.path(save_path, paste0(accession, ".xml"))
+        if (!file.exists(saved_file)) {
+            download.file(paste0(ENTREZ_URL, accession), saved_file)
+            print(paste("SUCCESS! Now sleeping for", SLEEP))
+            Sys.sleep(SLEEP)
+        } else
+            print(paste("Found", saved_file))
+    }
+}
+
+xml_files <- getAnnotatedAccessions(complete$Sequence_genome_Accession_number,
+                                    file.path(RAW_SAVE_PATH, "xml"))
+```
+
+# Get proteins from xml
+
+```{r get-proteins}
+
+getProtein <- function(nodes) {
+    protein <- NULL
+    label <- NULL
+    sequence <- ""
+    annotation <- nodes |>
+        xml_children() |>
+        xml_contents() |>
+        xml_text()
+    if ("protein_id" %in% annotation) {
+        for (i in seq(from = 1, to = length(annotation) - 1, by = 2)) {
+            if (annotation[i] == "translation") {
+                sequence <- annotation[i+1]
+            } else {
+                label <- c(label,
+                           paste0(annotation[i], "=", annotation[i+1]))
+            }
+        }
+        if (nchar(sequence) >= 30 && !("product=hypothetical protein" %in% label))
+            protein <- c(paste0(label, collapse = "|"), sequence)
+    }
+    protein
+}
+
+getProteins <- function(accessions, save_path) {
+    proteins <- list()
+    for (accession in accessions) {
+        doc <- read_xml(file.path(save_path, paste0(accession, ".xml")))
+        gbfeatures <- xml_find_all(doc, "//GBFeature")
+        gbfeature_quals <- xml_find_all(gbfeatures, "//GBFeature_quals")
+        for (gbqualifier in gbfeature_quals) {
+            protein <- getProtein(gbqualifier)
+            if (!is.null(protein)) {
+                proteins[[length(proteins) + 1]] <- 
+                    c(paste0(accession, "|", protein[1]), protein[2])
+            }
+        }
+    }
+    proteins
+}
+
+complete_labeled_sequence <- 
+    getProteins(complete_labeled$Sequence_genome_Accession_number,
+                file.path(RAW_SAVE_PATH, "xml"))
+
+complete_unlabeled_sequence <- 
+    getProteins(complete_unlabeled$Sequence_genome_Accession_number,
+                file.path(RAW_SAVE_PATH, "xml"))
+
+complete_unlabeled_sequence <- 
+    as.data.frame(do.call(rbind, complete_unlabeled_sequence))
+
+header <- c("Meta", "Sequence")
+
+names(complete_unlabeled_sequence) <- header
+
+complete_labeled_sequence <- 
+    as.data.frame(do.call(rbind, complete_labeled_sequence))
+
+names(complete_labeled_sequence) <- header
+
+#temperate <- complete_labeled |>
+#    filter(Life_cycle_Type_phage == "Temperate") |>
+#    select(Sequence_genome_Accession_number) |>
+#    as.vector()
+
+#complete_labeled_sequence <- complete_labeled_sequence |>
+#    mutate(accession = stringr::str_extract(label, "^[A-Za-z0-9]+|"),
+#           life_cyle = ifelse(accession %in% temperate, "Temperate", "Virulent")) 
+
+write.csv(complete_unlabeled_sequence,
+          file.path(DATA_SAVE_PATH, "complete_unlabeled_sequence.csv"))
+
+complete_labeled_sequence <- complete_labeled_sequence |>
+    mutate(Accession = stringr::str_extract(Meta, "^[a-zA-Z0-9.]+|"),
+           `Type_Phage` = "")
+
+# Add labels
+for (i in seq(1, dim(complete_labeled_sequence)[1])) {
+    accession <- complete_labeled_sequence[i, ]$Accession
+    type_phage <- complete_labeled |>
+        filter(trimws(Sequence_genome_Accession_number) == trimws(accession)) |>
+        pull(Life_cycle_Type_phage)
+    complete_labeled_sequence[i, ]$Type_Phage <- type_phage
+}
+
+write.csv(complete_labeled_sequence,
+          file.path(DATA_SAVE_PATH, "complete_labeled_sequence.csv"))
+```
