@@ -19,6 +19,12 @@ Imports:
     R6,
     stringr
 Suggests:
+    corrplot,
+    FSelector,
+    ggplot2,
+    pheatmap,
+    RColorBrewer,
+    tidyr,
     testthat (>= 3.0.0)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
